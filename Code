@@ -1,0 +1,556 @@
+library(plyr)
+library(readr)
+library(dplyr)
+library(ggplot2)
+library(lattice)
+library(caret)
+library(caretEnsemble)
+library(ROSE)
+library(tidyverse)
+library(data.table)
+
+setwd("/Users/hanimabdelhamid/desktop/MATH3628/Logistic regression example")#change to your working directory
+getwd()
+#cleaning the data and imputating un-needed columns
+data <- read_csv("data_set.csv")
+glimpse(data)
+
+data2 = select(data,-1,-3,-4,-7)
+glimpse(data2)
+#changing some columns to factors
+names <- c(1,5)
+data2[,names] <- lapply(data2[,names] , factor)
+glimpse(data2)
+
+head(data2)
+
+data2$Group<- factor(data2$Group,
+                     levels = c(0,1),
+                     labels = c("Zero", "One"  ))
+
+set.seed(100)
+library(caTools)
+#splitting dataset
+inTrain <- createDataPartition(
+  y = as.factor(data2$Group),
+  p = 0.75,
+  list = FALSE
+)
+
+str(inTrain)
+
+train <- data2[ inTrain,]
+test  <- data2[-inTrain,]
+nrow(train)
+nrow(test)
+
+print(dim(train)); print(dim(test))
+
+########################################
+#train$Group <- factor(train$Group ,
+#                         levels = c(0, 1),
+#                         labels = c("Zero", "One"   ))
+
+#test$Group <- factor(test$Group ,
+#                        levels = c(0, 1),
+#                        labels = c("Zero", "One"   ))
+
+train$Group <- as.character(train$Group)
+train$Group <- as.factor(train$Group)
+
+#Defining the training controls for multiple models
+fitControl <- trainControl(
+  method = "cv",
+  number = 5,
+  savePredictions = 'final',
+  classProbs = T)
+fitControl
+
+#Defining the predictors and outcome
+predictors <-c("Age", "eTIV", "CDR", "MMSE",
+               "nWBV")
+outcomeName <- "Group"
+########################################
+
+model_glm = glm(Group ~ ., family="binomial", data = train)
+model_glm
+#Predictions on the test set
+predictTest = predict(model_glm, newdata = test, type = "response")
+
+# Confusion matrix on test set
+table(test$Group, predictTest >= 0.5)
+3/nrow(test) #Accuracy - 81%
+
+set.seed(100)
+
+control1 <- trainControl(sampling="rose",method="repeatedcv", number=5, repeats=5)
+
+bagCART_model <- train(Group ~., data=train, method="treebag", metric="Accuracy", trControl=control1)
+
+#Predictions on the test set
+predictTest = predict(bagCART_model, newdata = test)
+
+# Confusion matrix on test set
+table(test$Group, predictTest)
+33/nrow(test) #Accuracy - 89%
+
+set.seed(100)
+
+control1 <- trainControl(sampling="rose",method="repeatedcv", number=5, repeats=5)
+
+rf_model <- train(Group ~., data=train, method="rf", metric="Accuracy", trControl=control1)
+
+predictTest = predict(rf_model, newdata = test, type = "raw")
+
+# Confusion matrix on test set
+table(test$Group, predictTest)
+34/nrow(test) #Accuracy - 91.89%
+
+
+set.seed(100)
+control2 <- trainControl(sampling="rose",method="repeatedcv", number=5, repeats=5)
+
+gbm_model <- train(Group ~., data=train, method="gbm", metric="Accuracy", trControl=control2)
+
+predictTest = predict(gbm_model, newdata = test)
+
+table(test$Group, predictTest)
+34/nrow(test) #Accuracy - 91.89%
+
+
+set.seed(100)
+
+control1 <- trainControl(sampling="rose",method="repeatedcv", number=5, repeats=5)
+
+knn_model <- train(Group ~., data=train, method="knn", metric="Accuracy", trControl=control1)
+
+predictTest = predict(knn_model, newdata = test, type = "raw")
+
+# Confusion matrix on test set
+table(test$Group, predictTest)
+19/nrow(test) #Accuracy - 51.35%
+
+
+set.seed(100)
+
+control_stacking <- trainControl(method="repeatedcv", number=5, repeats=2, savePredictions=TRUE, classProbs=TRUE)
+
+algorithms_to_use <- c('rpart', 'glm', 'knn', 'svmRadial')
+
+stacked_models <- caretList(Group ~., data=data2, trControl=control_stacking, methodList=algorithms_to_use)
+
+stacking_results <- resamples(stacked_models)
+
+summary(stacking_results)
+
+
+# stack using glm
+stackControl <- trainControl(method="repeatedcv", number=5, repeats=3, savePredictions=TRUE, classProbs=TRUE)
+
+set.seed(100)
+
+glm_stack <- caretStack(stacked_models, method="glm", metric="Accuracy", trControl=stackControl)
+
+print(glm_stack) #Stacking Accuracy - 92%
+
+#################Confusion_matrix#####################
+
+# Training model
+logistic_model <- glm(Group ~ .,
+                      data = train,
+                      family = "binomial")
+logistic_model
+
+# Summary
+summary(logistic_model)
+
+# Predict test data based on model
+predict_prob <- predict(logistic_model,
+                        test, type = "response")
+predict_prob
+
+# Changing probabilities
+predict_reg <- ifelse(predict_prob >0.5, 1, 0)
+predict_reg
+
+#Quick check
+
+head(predict_reg)
+head(predict_prob)
+
+# Evaluating model accuracy
+# using confusion matrix
+table(test$Group, predict_prob)
+###################
+str(predict_reg)
+str(test$Group)
+levels(test$Group)
+levels(predict_reg)
+levels(test$Group) <- list("0" = "Zero", "1" = "One")
+###################
+missing_classerr <- mean(test != predict_reg)
+missing_classerr
+print(paste('Accuracy =', 1 - missing_classerr))
+################
+library(caret)
+#install.packages("InformationValue")
+#install.packages("ISLR")
+#library(InformationValue)
+library(ISLR)
+
+test$Group
+test$Group <- as.factor(test$Group)
+predict_reg <- as.factor(predict_reg)
+
+#create confusion matrix
+confusionMatrix(test$Group, predict_reg)
+
+#################################################
+
+#####################Caret############################
+
+plsFit <- train(as.factor(Group) ~ .,
+                data = train,
+                method = "pls",
+                ## Center and scale the predictors for the training
+                ## set and all future samples.
+                preProc = c("center", "scale")
+)
+
+
+
+plsFit <- train(as.factor(Group) ~ .,
+                data = train,
+                method = "pls",
+                preProc = c("center", "scale"),
+                ## added:
+                tuneLength = 15
+)
+
+ctrl <- trainControl(method = "repeatedcv", repeats = 3)
+
+plsFit <- train(as.factor(Group) ~ .,
+                data = train,
+                method = "pls",
+                preProc = c("center", "scale"),
+                tuneLength = 15,
+                ## added:
+                trControl = ctrl
+)
+
+
+ctrl <- trainControl(
+  method = "repeatedcv", 
+  repeats = 3,
+  classProbs = TRUE, 
+  summaryFunction = twoClassSummary
+)
+
+set.seed(123)
+plsFit <- train(as.factor(Group) ~ .,
+                data = train,
+                method = "pls",
+                preProc = c("center", "scale"),
+                tuneLength = 15,
+                trControl = ctrl,
+                clasprobs = FALSE,
+                metric = "ROC"
+)
+
+plsFit
+ggplot(plsFit)  
+
+plsClasses <- predict(plsFit, newdata = test)
+str(plsClasses)
+
+plsProbs <- predict(plsFit, newdata = test, type = "prob")
+head(plsProbs)
+confusionMatrix(data = as.factor(plsClasses), as.factor(test$Group))
+
+#############################################################
+######################ERROR STARTS HERE, CHECK WITH CRAIG#######################################
+
+rdaGrid = data.frame(gamma = (0:4)/4, lambda = 3/4)
+set.seed(123)
+rdaFit <- train(as.factor(Group) ~ .,
+                data = train,
+                method = "rda",
+                tuneGrid = rdaGrid,
+                trControl = ctrl,
+                metric = "ROC"
+)
+
+rdaFit
+
+rdaClasses <- predict(rdaFit, newdata = test)
+confusionMatrix(as.factor(rdaClasses), as.factor(test$Group))
+
+resamps <- resamples(list(pls = plsFit, rda = rdaFit))
+summary(resamps)
+xyplot(resamps, what = "BlandAltman")
+
+diffs <- diff(resamps)
+summary(diffs)
+
+############################################
+
+########################LR/AUROC##########################
+
+# Training model
+logistic_model <- glm(Group ~ .,
+                      data = train,
+                      family = "binomial")
+logistic_model
+
+# Summary
+summary(logistic_model)
+
+# Predict test data based on model
+predict_reg <- predict(logistic_model,
+                       test, type = "response")
+predict_reg
+
+# Changing probabilities
+predict_reg <- ifelse(predict_reg >0.5, 1, 0)
+
+# Evaluating model accuracy
+# using confusion matrix
+table(test$Group, predict_reg)
+
+missing_classerr <- mean(predict_reg != test$Group)
+print(paste('Accuracy =', 1 - missing_classerr))
+
+# ROC-AUC Curve
+ROCPred <- prediction(predict_reg, test$Group)
+ROCPer <- performance(ROCPred, measure = "tpr",
+                      x.measure = "fpr")
+
+auc <- performance(ROCPred, measure = "auc")
+auc <- auc@y.values[[1]]
+auc
+
+# Plotting curve
+plot(ROCPer)
+plot(ROCPer, colorize = TRUE,
+     print.cutoffs.at = seq(0.1, by = 0.1),
+     main = "ROC CURVE")
+abline(a = 0, b = 1)
+
+auc <- round(auc, 4)
+legend(.6, .4, auc, title = "AUC", cex = 1)
+
+#########################################################
+
+####################Regularization################################
+
+# fit logistic regression model
+# method and family defines the type of regression
+# in this case these arguments mean that we are doing logistic
+# regression
+lrFit = train(Group ~ EDUC,  #did all variables;age,nWBV,CDR just changed
+              data=train, trControl=trainControl("none"),
+              method="glm", family="binomial")
+lrFit
+# create data to plot the sigmoid curve
+newdat <- data.frame(EDUC=seq(min(train$EDUC),
+                              max(train$EDUC),len=100))
+
+# predict probabilities for the simulated data
+newdat$Group = predict(lrFit, newdata=newdat, type="prob")[,1]
+
+# plot the sigmoid curve and the training data
+plot(ifelse(Group=="Demented",1,0) ~ EDUC, 
+     data=train, col="red4",
+     ylab="Group as 0 or 1", xlab="EDUC expression")
+lines(Group ~ EDUC, newdat, col="green4", lwd=2)
+##################
+str(train)
+str(class.res)
+levels(train)
+levels(class.res)
+levels(train$Group)
+
+# training accuracy 
+class.res=predict(lrFit,train[,-1])
+#class.res
+#class.res <- as.character(class.res)
+#class.res <- as.factor(class.res)
+confusionMatrix(train$Group,class.res)$overall[1]
+
+# test accuracy 
+class.res=predict(lrFit,test[,-1])
+confusionMatrix(test$Group,class.res)$overall[1]
+
+lrFit2 = train(Group ~ .,  
+               data=train, 
+               # no model tuning with sampling
+               trControl=trainControl("none"),
+               method="glm", family="binomial")
+
+# training accuracy 
+class.res=predict(lrFit2,train[,-1])
+confusionMatrix(train$Group,class.res)$overall[1]
+
+# test accuracy 
+class.res=predict(lrFit2,test[,-1])
+confusionMatrix(test$Group,class.res)$overall[1]
+
+set.seed(17)
+library(glmnet)
+
+# this method controls everything about training
+# we will just set up 10-fold cross validation
+trctrl <- trainControl(method = "cv",number=10)
+
+# we will now train elastic net model
+# it will try
+enetFit <- train(Group~., data = train, 
+                 method = "glmnet",
+                 trControl=trctrl,
+                 # alpha and lambda paramters to try
+                 tuneGrid = data.frame(alpha=0.5,
+                                       lambda=seq(0.1,0.7,0.05)))
+
+print(enetFit)
+enetFit$finalModel
+enetFit$resample
+# best alpha and lambda values by cross-validation accuracy
+enetFit$bestTune
+
+# test accuracy 
+class.res=predict(enetFit,test[,-1])
+confusionMatrix(test$Group,class.res)$overall[1]
+
+plot(varImp(enetFit),top=8)
+#######################################################
+
+################# K-fold cross validation###################
+library(caret)
+ctrl <- trainControl(method = "LOOCV", number = 10)
+
+#fit a regression model and use k-fold CV to evaluate performance
+model <- train(Group ~ ., data = data2, method = "glm", trControl = ctrl)
+
+#view summary of k-fold CV               
+print(model)
+model$finalModel
+###########################################
+
+###############FEATURE SELECTION###########################
+
+################Boruta######################
+# Load Packages and prepare dataset
+install.packages("TH.data")
+library(TH.data)
+library(caret)
+data("data2", package = "TH.data")
+trainData <- data2
+head(trainData)
+install.packages('Boruta')
+library(Boruta)
+# Perform Boruta search
+boruta_output <- Boruta(Group ~ ., data=na.omit(trainData), doTrace=0)  
+names(boruta_output)
+# Get significant variables including tentatives
+boruta_signif <- getSelectedAttributes(boruta_output, withTentative = TRUE)
+print(boruta_signif) 
+# Do a tentative rough fix
+roughFixMod <- TentativeRoughFix(boruta_output)
+boruta_signif <- getSelectedAttributes(roughFixMod)
+print(boruta_signif)
+# Variable Importance Scores
+imps <- attStats(roughFixMod)
+imps2 = imps[imps$decision != 'Rejected', c('meanImp', 'decision')]
+head(imps2[order(-imps2$meanImp), ])  # descending sort
+# Plot variable importance
+plot(boruta_output, cex.axis=.7, las=2, xlab="", main="Variable Importance")  
+######################################
+
+####################rpart##################
+
+# Train an rpart model and compute variable importance.
+library(caret)
+set.seed(100)
+rPartMod <- train(Group ~ ., data=trainData, method="rpart")
+rpartImp <- varImp(rPartMod)
+print(rpartImp)
+################RRF########################
+# Train an RRF model and compute variable importance.
+set.seed(100)
+rrfMod <- train(Group ~ ., data=trainData, method="RRF")
+rrfImp <- varImp(rrfMod, scale=F)
+rrfImp
+plot(rrfImp, top = 8, main='Variable Importance')
+######################################
+
+##################RFE####################
+library(ggplot2)
+library(lattice)
+library(caret)
+str(trainData)
+
+set.seed(100)
+options(warn=-1)
+
+subsets <- c(1:5)
+
+ctrl <- rfeControl(functions = rfFuncs,
+                   method = "repeatedcv",
+                   repeats = 5,
+                   verbose = FALSE)
+
+lmProfile <- rfe(x=trainData[, c(2:3, 5:8)], y=trainData$Group,
+                 sizes = subsets,
+                 rfeControl = ctrl)
+
+lmProfile
+#####################################
+
+##########Ridge regression##################
+
+install.packages("glmnet")
+library(glmnet)
+
+data2
+
+#define response variable
+y <- data2$Group
+as.factor(y)
+#define matrix of predictor variables
+x <- data.matrix(data2[, c('Age', 'CDR', 'MMSE', 'EDUC', 'eTIV' , 'nWBV' , 'ASF')])
+
+
+#fit ridge regression model
+model <- glmnet(x, y, alpha = 0)
+
+#view summary of model
+summary(model)
+
+#perform k-fold cross-validation to find optimal lambda value
+cv_model <- cv.glmnet(x, y, alpha = 0)
+
+#find optimal lambda value that minimizes test MSE
+best_lambda <- cv_model$lambda.min
+best_lambda
+
+#produce plot of test MSE by lambda value
+plot(cv_model) 
+
+#find coefficients of best model
+best_model <- glmnet(x, y, alpha = 0, lambda = best_lambda)
+coef(best_model)
+
+#produce Ridge trace plot
+plot(model, xvar = "lambda")
+
+#use fitted best model to make predictions
+y_predicted <- predict(model, s = best_lambda, newx = x)
+
+#find SST and SSE
+sst <- sum((y - mean(y))^2)
+sse <- sum((y_predicted - y)^2)
+
+#find R-Squared
+rsq <- 1 - sse/sst
+rsq
+################################
